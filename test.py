@@ -7,6 +7,12 @@ from iopaint.schema import HDStrategy, LDMSampler, InpaintRequest as Config
 import torch
 from loguru import logger
 from enum import Enum
+import tempfile
+from pathlib import Path
+import tqdm
+import subprocess
+import shutil
+import os
 
 try:
     from cv2.typing import MatLike
@@ -135,6 +141,119 @@ def main():
     result_image = Image.fromarray(cv2.cvtColor(lama_result, cv2.COLOR_BGR2RGB))
     print("11111111111111")
 
+def main1():
+    # 输入
+    # input_path = "D:\\workspace\\vmshareroom\\python_project\\watermarkRemover\\testInput\\test001.mp4"
+    # output_path = "D:\\workspace\\vmshareroom\\python_project\\watermarkRemover\\testOutput\\test001.mp4"
+    input_path = "E:\\workspace\\vmshareroom\\python_project\\WatermarkRemover\\testInput\\test001.mp4"
+    output_path = "E:\\workspace\\vmshareroom\\python_project\\WatermarkRemover\\testOutput\\test001.mp4"
+
+    # 判断是用cpu还是gpu
+    useDevice = "cuda" if torch.cuda.is_available() else "cpu"
+    # useDevice = "cpu"
+    florence_model = AutoModelForCausalLM.from_pretrained("microsoft/Florence-2-large", trust_remote_code=True).to(useDevice).eval()
+    florence_processor = AutoProcessor.from_pretrained("microsoft/Florence-2-large", trust_remote_code=True)
+    logger.info("Florence-2 Model loaded")
+
+    model_manager = ModelManager(name="lama", device=torch.device(useDevice))
+    logger.info("LaMa model loaded")
+
+    # 处理视频
+    cap = cv2.VideoCapture(str(input_path))
+    if not cap.isOpened():
+        logger.error(f"Error opening video file: {input_path}")
+        return
+
+    # 获取视频属性
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    # 创建一个临时文件，用于存放没有音频的视频
+    temp_dir = tempfile.mkdtemp()
+    temp_video_path = Path(temp_dir) / "temp_no_audio.mp4"
+
+    # 根据输出格式设置编解码器
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+
+    out = cv2.VideoWriter(str(temp_video_path), fourcc, fps, (width, height))
+
+    # 处理每一帧
+    with tqdm.tqdm(total=total_frames, desc="Processing video frames") as pbar:
+        frame_count = 0
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            # 将帧转换为 PIL 图像
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(frame_rgb)
+
+            # Get watermark mask
+            mask_image = get_watermark_mask(pil_image, florence_model, florence_processor, useDevice, 100.0)
+
+            # 处理帧
+            lama_result = process_image_with_lama(np.array(pil_image), np.array(mask_image), model_manager)
+            result_image = Image.fromarray(cv2.cvtColor(lama_result, cv2.COLOR_BGR2RGB))
+
+            # 转换回 OpenCV 格式并写入输出视频
+            frame_result = cv2.cvtColor(np.array(result_image), cv2.COLOR_RGB2BGR)
+            out.write(frame_result)
+
+            # 更新进度
+            frame_count += 1
+            pbar.update(1)
+            progress = int((frame_count / total_frames) * 100)
+            print(f"Processing frame {frame_count}/{total_frames}, progress:{progress}%")
+
+    # Release resources
+    cap.release()
+    out.release()
+
+    # 使用 FFmpeg 将处理后的视频与原始音频合并
+    try:
+        logger.info("Fusion de la vidéo traitée avec l'audio original...")
+
+        # 检查 FFmpeg 是否可用
+        try:
+            subprocess.check_output(["ffmpeg", "-version"], stderr=subprocess.STDOUT)
+        except (subprocess.SubprocessError, FileNotFoundError):
+            logger.warning("FFmpeg n'est pas disponible. La vidéo sera produite sans audio.")
+            shutil.copy(str(temp_video_path), str(output_path))
+        else:
+            # 使用 FFmpeg 将处理后的视频与原始音频合并
+            ffmpeg_cmd = [
+                "ffmpeg", "-y",
+                "-i", str(temp_video_path),  # Vidéo traitée sans audio
+                "-i", str(input_path),  # Vidéo originale avec audio
+                "-c:v", "copy",  # Copier la vidéo sans réencodage
+                "-c:a", "aac",  # Encoder l'audio en AAC pour meilleure compatibilité
+                "-map", "0:v:0",  # Utiliser la piste vidéo du premier fichier (vidéo traitée)
+                "-map", "1:a:0",  # Utiliser la piste audio du deuxième fichier (vidéo originale)
+                "-shortest",  # Terminer quand la piste la plus courte se termine
+                str(output_path)
+            ]
+
+            # 运行 FFmpeg
+            subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            logger.info("Fusion audio/vidéo terminée avec succès!")
+    except Exception as e:
+        logger.error(f"Erreur lors de la fusion audio/vidéo: {str(e)}")
+        # 如果出现错误，请使用无声视频
+        shutil.copy(str(temp_video_path), str(output_path))
+    finally:
+        # 清理临时文件
+        try:
+            os.remove(str(temp_video_path))
+            os.rmdir(temp_dir)
+        except:
+            pass
+
+    logger.info(f"input_path:{input_path}, output_path:{output_path}, overall_progress:100")
+    print("11111111111111")
 
 if __name__ == "__main__":
-    main()
+    # main()
+    main1()
