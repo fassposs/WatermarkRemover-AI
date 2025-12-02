@@ -31,12 +31,12 @@ class Worker(QObject):
 
     def run(self):
         try:
-            # Créer un thread pour lire stderr
+            # 创建一个线程来读取 stderr
             error_thread = threading.Thread(target=self.read_stderr)
             error_thread.daemon = True
             error_thread.start()
             
-            # Lire stdout avec un timeout pour éviter les blocages
+            # 使用超时机制读取标准输出，以避免阻塞
             while self.running and self.process.poll() is None:
                 line = self.process.stdout.readline()
                 if line:
@@ -48,10 +48,10 @@ class Worker(QObject):
                         except (ValueError, IndexError) as e:
                             self.log_signal.emit(f"Erreur de parsing de la progression: {str(e)}")
                 else:
-                    # Petite pause pour éviter d'utiliser trop de CPU
+                    # 短暂休息，避免CPU占用过高
                     time.sleep(0.1)
             
-            # Vérifier si le processus s'est terminé normalement
+            # 检查流程是否正常完成
             if self.process.returncode is not None and self.process.returncode != 0:
                 self.error_signal.emit(f"Le processus s'est terminé avec le code d'erreur: {self.process.returncode}")
                 
@@ -84,9 +84,9 @@ class WatermarkRemoverGUI(QMainWindow):
         self.setWindowTitle("Watermark Remover GUI")
         self.setGeometry(100, 100, 800, 600)
 
-        # Initialize UI elements
-        self.radio_single = QRadioButton("Process Single File")
-        self.radio_batch = QRadioButton("Process Directory")
+        # 初始化UI元素
+        self.radio_single = QRadioButton("处理文件")
+        self.radio_batch = QRadioButton("处理目录")
         self.radio_single.setChecked(True)
         self.mode_group = QButtonGroup()
         self.mode_group.addButton(self.radio_single)
@@ -94,12 +94,12 @@ class WatermarkRemoverGUI(QMainWindow):
 
         self.input_path = QLineEdit(self)
         self.output_path = QLineEdit(self)
-        self.overwrite_checkbox = QCheckBox("Overwrite Existing Files", self)
-        self.transparent_checkbox = QCheckBox("Make Watermark Transparent", self)
+        self.overwrite_checkbox = QCheckBox("覆盖已存在的文件", self)
+        self.transparent_checkbox = QCheckBox("使水印透明", self)
         self.max_bbox_percent_slider = QSlider(Qt.Orientation.Horizontal, self)
         self.max_bbox_percent_slider.setRange(1, 100)
         self.max_bbox_percent_slider.setValue(10)
-        self.max_bbox_percent_label = QLabel(f"Max BBox Percent: 10%", self)
+        self.max_bbox_percent_label = QLabel(f"最大边界框百分比: 10%", self)
         self.max_bbox_percent_slider.valueChanged.connect(self.update_bbox_label)
 
         self.force_format_png = QRadioButton("PNG")
@@ -136,7 +136,7 @@ class WatermarkRemoverGUI(QMainWindow):
         self.timer.start(1000)  # Update every second
 
         self.process = None
-        self.thread = None
+        self.Qthread = None
         self.worker = None
 
         # Layout
@@ -149,12 +149,17 @@ class WatermarkRemoverGUI(QMainWindow):
 
         # Input and output paths
         path_layout = QVBoxLayout()
-        path_layout.addWidget(QLabel("Input Path:"))
+        path_layout.addWidget(QLabel("输入路径:"))
         path_layout.addWidget(self.input_path)
-        path_layout.addWidget(QPushButton("Browse", clicked=self.browse_input))
-        path_layout.addWidget(QLabel("Output Path:"))
+        browse_input_btn = QPushButton("浏览")
+        browse_input_btn.clicked.connect(self.browse_input)
+        path_layout.addWidget(browse_input_btn)
+
+        path_layout.addWidget(QLabel("输出路径:"))
         path_layout.addWidget(self.output_path)
-        path_layout.addWidget(QPushButton("Browse", clicked=self.browse_output))
+        browse_input_btn = QPushButton("浏览")
+        browse_input_btn.clicked.connect(self.browse_output)
+        path_layout.addWidget(browse_input_btn)
 
         # Options
         options_layout = QVBoxLayout()
@@ -217,7 +222,7 @@ class WatermarkRemoverGUI(QMainWindow):
         self.toggle_logs_button.setText("Hide Logs" if checked else "Show Logs")
 
     def apply_dark_mode_if_needed(self):
-        if QApplication.instance().styleHints().colorScheme() == Qt.ColorScheme.Dark:
+        if QApplication.instance().styleHints().colorScheme() == Qt.ColorScheme.Dark: # type: ignore
             dark_palette = QPalette()
             dark_palette.setColor(QPalette.ColorRole.Window, QColor(53, 53, 53))
             dark_palette.setColor(QPalette.ColorRole.WindowText, QColor(255, 255, 255))
@@ -234,7 +239,7 @@ class WatermarkRemoverGUI(QMainWindow):
             dark_palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
             dark_palette.setColor(QPalette.ColorRole.HighlightedText, QColor(0, 0, 0))
 
-            QApplication.instance().setPalette(dark_palette)
+            QApplication.instance().setPalette(dark_palette) # type: ignore
 
     def update_system_info(self):
         cuda_available = "CUDA: Available" if torch.cuda.is_available() else "CUDA: Not Available"
@@ -297,14 +302,14 @@ class WatermarkRemoverGUI(QMainWindow):
             QMessageBox.warning(self, "Warning", "Transparency is not supported for videos. Continuing with non-transparent processing.")
             self.transparent_checkbox.setChecked(False)
             
-        # Vérifier si FFmpeg est disponible pour les vidéos
+        # 检查视频处理所需的FFmpeg是否可用
         if is_video:
             ffmpeg_available = self.check_ffmpeg_available()
             if not ffmpeg_available:
                 response = QMessageBox.warning(
                     self, 
-                    "FFmpeg non disponible", 
-                    "FFmpeg n'est pas disponible sur votre système. Les vidéos traitées n'auront pas de son.\n\nVoulez-vous continuer quand même?",
+                    "FFmpeg不可用", 
+                    "您的系统上没有安装FFmpeg. 处理后的视频将没有声音.\n\n您仍要继续吗?",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.No
                 )
@@ -352,10 +357,10 @@ class WatermarkRemoverGUI(QMainWindow):
         self.worker.finished_signal.connect(self.reset_ui)
         self.worker.error_signal.connect(self.handle_error)
 
-        self.thread = QThread()
-        self.worker.moveToThread(self.thread)
-        self.thread.started.connect(self.worker.run)
-        self.thread.start()
+        self.Qthread = QThread()
+        self.worker.moveToThread(self.Qthread)
+        self.Qthread.started.connect(self.worker.run)
+        self.Qthread.start()
 
         self.stop_button.setDisabled(False)
         self.start_button.setDisabled(True)
@@ -391,11 +396,11 @@ class WatermarkRemoverGUI(QMainWindow):
     def reset_ui(self):
         self.stop_button.setDisabled(True)
         self.start_button.setDisabled(False)
-        if self.thread and self.thread.isRunning():
-            self.thread.quit()
-            self.thread.wait()
+        if self.Qthread and self.Qthread.isRunning():
+            self.Qthread.quit()
+            self.Qthread.wait()
         self.process = None
-        self.thread = None
+        self.Qthread = None
         self.worker = None
 
     def save_config(self):
@@ -453,15 +458,16 @@ class WatermarkRemoverGUI(QMainWindow):
             self.toggle_logs(True)
         QMessageBox.critical(self, "Erreur", f"Une erreur est survenue: {error_message}")
 
-    def closeEvent(self, event):
+    def closeEvent(self, a0):
         self.save_config()
-        event.accept()
+        if a0 is not None:
+            a0.accept()
 
     def check_ffmpeg_available(self):
-        """Vérifie si FFmpeg est disponible sur le système"""
+        """检查系统上是否安装了 FFmpeg"""
         try:
-            # Essayer d'exécuter ffmpeg -version pour vérifier s'il est installé
-            subprocess.check_output(["ffmpeg", "-version"], stderr=subprocess.STDOUT)
+            # 尝试运行 `ffmpeg -version` 来检查是否已安装
+            subprocess.check_output(["ffmpeg", "-version"], stderr=subprocess.STDOUT,env=os.environ)
             return True
         except (subprocess.SubprocessError, FileNotFoundError):
             return False
