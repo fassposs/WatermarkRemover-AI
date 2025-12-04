@@ -19,7 +19,6 @@ from cv2.typing import MatLike
 import queue
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import easyocr
 from easyocr import Reader
 
 
@@ -255,16 +254,18 @@ def main():
 
 def main1():
     # 输入
-    # input_path = "D:\\workspace\\vmshareroom\\python_project\\watermarkRemover\\testInput\\test001.mp4"
-    # output_path = "D:\\workspace\\vmshareroom\\python_project\\watermarkRemover\\testOutput\\test001.mp4"
-    input_path = "E:\\workspace\\vmshareroom\\python_project\\WatermarkRemover\\testInput\\test001.mp4"
-    output_path = "E:\\workspace\\vmshareroom\\python_project\\WatermarkRemover\\testOutput\\test001.mp4"
+    input_path = "./testInput/test001.mp4"
+    output_path = "./testOutput/test001.mp4"
+    # input_path = "E:\\workspace\\vmshareroom\\python_project\\WatermarkRemover\\testInput\\test001.mp4"
+    # output_path = "E:\\workspace\\vmshareroom\\python_project\\WatermarkRemover\\testOutput\\test001.mp4"
 
     # 判断是用cpu还是gpu
     useDevice = "cuda" if torch.cuda.is_available() else "cpu"
+    logger.info(f"useDevice: {useDevice}")
+
     # useDevice = "cpu"
-    florence_model = None #AutoModelForCausalLM.from_pretrained("microsoft/Florence-2-large", trust_remote_code=True).to(useDevice).eval()
-    florence_processor = None # AutoProcessor.from_pretrained("microsoft/Florence-2-large", trust_remote_code=True)
+    # florence_model = None #AutoModelForCausalLM.from_pretrained("microsoft/Florence-2-large", trust_remote_code=True).to(useDevice).eval()
+    # florence_processor = None # AutoProcessor.from_pretrained("microsoft/Florence-2-large", trust_remote_code=True)
     logger.info("Florence-2 Model loaded")
     ocr = None
     # ocr = PaddleOCR(
@@ -273,7 +274,7 @@ def main1():
     #     use_doc_orientation_classify=False,
     #     use_doc_unwarping=False,
     #     use_textline_orientation=False)
-    reader = Reader(['ch_sim', 'en'], gpu=True if useDevice=="cuda" else False)
+    reader = Reader(['ch_sim', 'en'], gpu=True if useDevice == "cuda" else False)
     model_manager = ModelManager(name="lama", device=torch.device(useDevice))
     logger.info("LaMa model loaded")
 
@@ -300,7 +301,7 @@ def main1():
 
     # frame_img_list = list()
 
-    max_workers = 10
+    max_workers = 5
     threadPool = ThreadPoolExecutor(max_workers=max_workers)
     # futures = list()
     # 创建线程安全的队列
@@ -339,6 +340,7 @@ def main1():
                     out.write(frame_result)
                 else:
                     shared_queue.put(future)
+
     # 启动读取线程
     t = threading.Thread(target=get_result, name='get_result')
     t.start()
@@ -359,9 +361,9 @@ def main1():
             pil_image = Image.fromarray(frame_rgb)
             convert_time = time.time()  # 转换完成时间
 
-            shared_queue.put(threadPool.submit(process_frame, pil_image,frame_count))
+            shared_queue.put(threadPool.submit(process_frame, pil_image, frame_count))
             # 数量超过等候一下
-            while shared_queue.qsize() > max_workers*2:
+            while shared_queue.qsize() > max_workers * 2:
                 time.sleep(1)
 
             # 更新进度
@@ -372,7 +374,6 @@ def main1():
             print(f"Frame {frame_count}: "
                   f"Read={int((read_frame_time - start_time) * 1000)}ms, "
                   f"Convert={int((convert_time - read_frame_time) * 1000)}ms, ")
-
 
     # 等数据用完
     while shared_queue.qsize() > 0:
