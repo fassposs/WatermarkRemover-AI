@@ -20,6 +20,22 @@ import queue
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from easyocr import Reader
+import signal
+import sys
+
+# 全局变量控制程序运行状态
+running = True
+
+
+def signal_handler(sig, frame):
+    global running
+    print("\n接收到中断信号，正在停止程序...")
+    running = False
+    sys.exit(0)
+
+
+# 在 main1() 函数开始处注册信号处理器
+signal.signal(signal.SIGINT, signal_handler)
 
 
 class TaskType(str, Enum):
@@ -58,22 +74,22 @@ def identify(task_prompt: TaskType, image: Image, text_input: str, model: AutoMo
     inputs = {k: v.to(device) for k, v in inputs.items()}
 
     # 执行模型推理生成响应
-    # generated_ids = model.generate(
-    #     input_ids=inputs["input_ids"],
-    #     pixel_values=inputs["pixel_values"],
-    #     max_new_tokens=1024,
-    #     early_stopping=False,
-    #     do_sample=False,
-    #     num_beams=3,
-    # )
     generated_ids = model.generate(
         input_ids=inputs["input_ids"],
         pixel_values=inputs["pixel_values"],
-        max_new_tokens=512,  # 减少最大生成令牌数
-        early_stopping=True,  # 启用早停
+        max_new_tokens=1024,
+        early_stopping=False,
         do_sample=False,
-        num_beams=1,  # 减少束搜索数量
+        num_beams=3,
     )
+    # generated_ids = model.generate(
+    #     input_ids=inputs["input_ids"],
+    #     pixel_values=inputs["pixel_values"],
+    #     max_new_tokens=512,  # 减少最大生成令牌数
+    #     early_stopping=True,  # 启用早停
+    #     do_sample=False,
+    #     num_beams=1,  # 减少束搜索数量
+    # )
     time3 = time.time()
     # 解码生成的token ID为文本，并进行后处理
     generated_text = processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
@@ -116,29 +132,8 @@ def get_watermark_mask(image: MatLike, model: AutoModelForCausalLM, processor: A
     return mask
 
 
-# 使用paddleocr来识别区域
-# def get_watermark_maskEx(ocr: PaddleOCR, image: MatLike):
-#     mask = Image.new("L", (image.width, image.height), 0)
-#     draw = ImageDraw.Draw(mask)
-#     result = ocr.predict(np.array(image),
-#                          use_doc_orientation_classify=False,
-#                          use_doc_unwarping=False,
-#                          use_textline_orientation=False,
-#                          )
-#     if len(result) > 0:
-#         for index, text in enumerate(result[0]["rec_texts"]):
-#             if text.find("今晚追剧") >= 0:
-#                 data = result[0]["rec_boxes"][index]
-#                 draw.rectangle((float(data[0]), float(data[1]), float(data[2]), float(data[3])), fill=255)
-#
-#     # 补充一个手动添加啊的区域
-#     x1, y1, x2, y2 = 19, 606, 105, 700
-#     draw.rectangle((x1, y1, x2, y2), fill=255)
-#     return mask
-
-
 # 使用easyocr来识别区域
-def get_watermark_maskEx2(reader: Reader, image: MatLike):
+def get_watermark_maskEx2(reader: Reader, image: MatLike, index):
     mask = Image.new("L", (image.width, image.height), 0)
     draw = ImageDraw.Draw(mask)
     result = reader.readtext(np.array(image))
@@ -157,6 +152,9 @@ def get_watermark_maskEx2(reader: Reader, image: MatLike):
         if text.find("今晚追剧") >= 0:
             draw.rectangle((float(top_left[0]), float(top_left[1]), float(bottom_right[0]), float(bottom_right[1])), fill=255)
 
+    if len(result) == 0:
+        logger.info(f"9999999999999999999999999999   ====={index}")
+
     # 补充一个手动添加啊的区域
     x1, y1, x2, y2 = 19, 606, 105, 700
     draw.rectangle((x1, y1, x2, y2), fill=255)
@@ -164,63 +162,28 @@ def get_watermark_maskEx2(reader: Reader, image: MatLike):
 
 
 def process_image_with_lama(image: MatLike, mask: MatLike, model_manager: ModelManager):
-    # config = Config(
-    #     ldm_steps=50,
-    #     ldm_sampler=LDMSampler.ddim,
-    #     hd_strategy=HDStrategy.CROP,
-    #     hd_strategy_crop_margin=64,
-    #     hd_strategy_crop_trigger_size=800,
-    #     hd_strategy_resize_limit=1600,
-    # )
     config = Config(
-        ldm_steps=20,  # 减少步数提高速度（原50）
+        ldm_steps=50,
         ldm_sampler=LDMSampler.ddim,
         hd_strategy=HDStrategy.CROP,
-        hd_strategy_crop_margin=32,  # 减小边缘留白（原64）
-        hd_strategy_crop_trigger_size=600,  # 降低触发阈值（原800）
-        hd_strategy_resize_limit=1200,  # 降低尺寸限制（原1600）
+        hd_strategy_crop_margin=64,
+        hd_strategy_crop_trigger_size=800,
+        hd_strategy_resize_limit=1600,
     )
+    # config = Config(
+    #     ldm_steps=20,  # 减少步数提高速度（原50）
+    #     ldm_sampler=LDMSampler.ddim,
+    #     hd_strategy=HDStrategy.CROP,
+    #     hd_strategy_crop_margin=32,  # 减小边缘留白（原64）
+    #     hd_strategy_crop_trigger_size=600,  # 降低触发阈值（原800）
+    #     hd_strategy_resize_limit=1200,  # 降低尺寸限制（原1600）
+    # )
     result = model_manager(image, mask, config)
 
     if result.dtype in [np.float64, np.float32]:
         result = np.clip(result, 0, 255).astype(np.uint8)
 
     return result
-
-
-# 使用线程池去处理图片帧
-def process_frame_image(frame_image_list, ocr, reader, florence_model, florence_processor, model_manager, device):
-    result_list = []
-    max_workers = 20
-    threadPool = ThreadPoolExecutor(max_workers=max_workers)
-
-    def process_image(index, pil_image):
-        # Get watermark mask
-        # mask_image = get_watermark_mask(pil_image, florence_model, florence_processor, device, 100.0)
-        # 启用paddleocr获取mask区域
-        # mask_image = get_watermark_maskEx(ocr, pil_image)
-        # 启用easyOcr
-        mask_image = get_watermark_maskEx2(reader, pil_image)
-
-        # 处理帧
-        lama_result = process_image_with_lama(np.array(pil_image), np.array(mask_image), model_manager)
-        # result_list.append({"index": index, "data": lama_result})
-        return {"index": index, "data": lama_result}
-
-    futures = list()
-    for index, pil_image in enumerate(frame_image_list):
-        print(f"add threadPool {index}")
-        futures.append(threadPool.submit(process_image, index, pil_image))
-
-    # 获取结果
-    for future in as_completed(futures):
-        result = future.result()
-        print(f"收到结果: {result["index"]}")
-        result_list.append(result)
-
-    # 所有的数据执行完成之后,对result_list按index从小到达排序,作为list返回排序后的data数据字段
-    result_list.sort(key=lambda x: x["index"])
-    return [item["data"] for item in result_list]
 
 
 def main():
@@ -264,8 +227,11 @@ def main1():
     logger.info(f"useDevice: {useDevice}")
 
     # useDevice = "cpu"
-    # florence_model = None #AutoModelForCausalLM.from_pretrained("microsoft/Florence-2-large", trust_remote_code=True).to(useDevice).eval()
-    # florence_processor = None # AutoProcessor.from_pretrained("microsoft/Florence-2-large", trust_remote_code=True)
+    local_model_path = "./models/Florence-2-large"
+    florence_model = AutoModelForCausalLM.from_pretrained(local_model_path, trust_remote_code=True, local_files_only=True).to(useDevice).eval()
+    florence_processor = AutoProcessor.from_pretrained(local_model_path, trust_remote_code=True, local_files_only=True)
+    # florence_model = AutoModelForCausalLM.from_pretrained("microsoft/Florence-2-large", trust_remote_code=True).to(useDevice).eval()
+    # florence_processor = AutoProcessor.from_pretrained("microsoft/Florence-2-large", trust_remote_code=True)
     logger.info("Florence-2 Model loaded")
     ocr = None
     # ocr = PaddleOCR(
@@ -301,54 +267,76 @@ def main1():
 
     # frame_img_list = list()
 
-    max_workers = 5
+    max_workers = 30
     threadPool = ThreadPoolExecutor(max_workers=max_workers)
     # futures = list()
     # 创建线程安全的队列
     shared_queue = queue.Queue(maxsize=100)
 
-    def process_frame(pil_image, index):
-        # 获取水印区域
-        mask_image = get_watermark_maskEx2(reader, pil_image)
+    def process_frame(pil_image1,florence_model1,florence_processor1,useDevice1,model_manager1,reader1, index):
+        if not running:
+            return
+        # 通过大模型获取水印
+        # mask_image = get_watermark_mask(pil_image1, florence_model1, florence_processor1, useDevice1, 100.0)
+
+        # 获取水印区域通过easyocr
+        mask_image = get_watermark_maskEx2(reader1, pil_image1, index)
+
         # 处理帧
-        lama_result = process_image_with_lama(np.array(pil_image), np.array(mask_image), model_manager)
+        lama_result = process_image_with_lama(np.array(pil_image1), np.array(mask_image), model_manager1)
         return {"index": index, "data": lama_result}
-        # # 重新加载为图片
-        # result_image = Image.fromarray(cv2.cvtColor(lama_result, cv2.COLOR_BGR2RGB))
-        # # 转换回 OpenCV 格式并写入输出视频
-        # frame_result = cv2.cvtColor(np.array(result_image), cv2.COLOR_RGB2BGR)
-        # # 写入帧
-        # out.write(frame_result)
 
     # 处理数据结果
     def get_result():
         needIndex = 0
+        tmpList = list()
         while needIndex <= total_frames - 1:
-            future = shared_queue.get()
-            if not future.done():
-                shared_queue.put(future)
-            else:
-                result = future.result()
-                if needIndex == result["index"]:
-                    print(f"收到结果: {result["index"]}")
-                    needIndex += 1
-                    # 重新加载为图片
-                    result_image = Image.fromarray(cv2.cvtColor(result["data"], cv2.COLOR_BGR2RGB))
-                    # 转换回 OpenCV 格式并写入输出视频
-                    frame_result = cv2.cvtColor(np.array(result_image), cv2.COLOR_RGB2BGR)
-                    # 写入帧
-                    out.write(frame_result)
-                else:
+            if not running:
+                break
+            # 2秒扫一轮
+            time.sleep(3)
+            while len(tmpList) > 0 and needIndex == tmpList[0]["index"]:
+                print(f"处理结果: {tmpList[0]["index"]}")
+                needIndex += 1
+                # 重新加载为图片
+                result_image = Image.fromarray(cv2.cvtColor(tmpList[0]["data"], cv2.COLOR_BGR2RGB))
+                # 转换回 OpenCV 格式并写入输出视频
+                frame_result = cv2.cvtColor(np.array(result_image), cv2.COLOR_RGB2BGR)
+                # 写入帧
+                out.write(frame_result)
+                # 去掉第一个数据
+                tmpList.pop(0)
+
+            for i in range(max_workers):
+                future = shared_queue.get()
+                if not future.done():
                     shared_queue.put(future)
+                else:
+                    result = future.result()
+                    if needIndex == result["index"]:
+                        print(f"收到结果: {result["index"]}")
+                        needIndex += 1
+                        # 重新加载为图片
+                        result_image = Image.fromarray(cv2.cvtColor(result["data"], cv2.COLOR_BGR2RGB))
+                        # 转换回 OpenCV 格式并写入输出视频
+                        frame_result = cv2.cvtColor(np.array(result_image), cv2.COLOR_RGB2BGR)
+                        # 写入帧
+                        out.write(frame_result)
+                    else:
+                        tmpList.append(result)
+                        # 按index从小到大排序一次
+                        tmpList.sort(key=lambda x: x["index"])
 
     # 启动读取线程
     t = threading.Thread(target=get_result, name='get_result')
     t.start()
+
     # 处理每一帧
-    # needIndex = 0
     with tqdm.tqdm(total=total_frames, desc="Processing video frames") as pbar:
         frame_count = 0
         while cap.isOpened():
+            if not running:
+                break
             start_time = time.time()  # 开始计时
             ret, frame = cap.read()
             if not ret:
@@ -361,10 +349,10 @@ def main1():
             pil_image = Image.fromarray(frame_rgb)
             convert_time = time.time()  # 转换完成时间
 
-            shared_queue.put(threadPool.submit(process_frame, pil_image, frame_count))
+            shared_queue.put(threadPool.submit(process_frame, pil_image, florence_model,florence_processor,useDevice,model_manager,reader,frame_count))
             # 数量超过等候一下
-            while shared_queue.qsize() > max_workers * 2:
-                time.sleep(1)
+            while shared_queue.qsize() > max_workers * 3:
+                time.sleep(0.2)
 
             # 更新进度
             frame_count += 1
