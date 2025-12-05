@@ -19,38 +19,34 @@ def remove_watermark_with_qwen(img_path, output_path):
         img_path: 输入图片路径
         output_path: 输出图片路径
     """
-
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     # 1. 加载Qwen-VL模型和处理器
     model_name = "Qwen/Qwen-VL-Chat"
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
-        trust_remote_code=True
-    ).eval()
+    model = AutoModelForCausalLM.from_pretrained(model_name,trust_remote_code=True).to(device).eval()
+    processor = AutoProcessor.from_pretrained(model_name,trust_remote_code=True)
 
-    processor = AutoProcessor.from_pretrained(
-        model_name,
-        trust_remote_code=True
-    )
+    # model_name = "microsoft/Florence-2-large"
+    # model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True).to(device).eval()
+    # processor = AutoProcessor.from_pretrained(model_name, trust_remote_code=True)
 
     # 2. 加载图片
     image = Image.open(img_path).convert("RGB")
 
     # 3. 构造提示词
-    prompt = "请移除这张图片中的水印，保持图片内容完整清晰"
+    prompt = "请识别这张图片中水印的位置，并以bounding box坐标形式返回"
 
     # 4. 处理输入
     inputs = processor(
         text=prompt,
         images=image,
         return_tensors="pt"
-    ).to(model.device)
+    )
+    inputs = {k: v.to(device) for k, v in inputs.items()}
 
     # 5. 模型推理
     generated_ids = model.generate(
         input_ids=inputs["input_ids"],
-        pixel_values=inputs["pixel_values"],
+        # pixel_values=inputs["pixel_values"],
         max_new_tokens=1024,
         num_beams=1,
         do_sample=False,
@@ -65,11 +61,18 @@ def remove_watermark_with_qwen(img_path, output_path):
         for input_ids, output_ids in zip(inputs["input_ids"], generated_ids)
     ]
 
+    # 6. 后处理结果
+    generated_ids = [
+        output_ids[len(input_ids):]
+        for input_ids, output_ids in zip(inputs["input_ids"], generated_ids)
+    ]
+
     response = processor.batch_decode(
         generated_ids,
         skip_special_tokens=True
     )[0]
 
+    return response
     # 7. 保存处理后的图片
     # 注意：Qwen-VL主要输出文本描述，实际图片编辑需结合其他方法
     print(f"模型响应: {response}")

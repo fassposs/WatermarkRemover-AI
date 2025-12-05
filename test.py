@@ -149,11 +149,14 @@ def get_watermark_maskEx2(reader: Reader, image: MatLike, index):
         # top_right = coordinates[1]     # [x, y]
         bottom_right = coordinates[2]  # [x, y]
         # bottom_left = coordinates[3]  # [x, y]
-        if text.find("今晚追剧") >= 0:
+        target_chars = ["@今", "今晚", "晚追", "追剧"]
+        if any(char_pair in text for char_pair in target_chars):
             draw.rectangle((float(top_left[0]), float(top_left[1]), float(bottom_right[0]), float(bottom_right[1])), fill=255)
+        # else:
+        #     logger.info(f"888888888888888888888888888   ====={index}")
 
-    if len(result) == 0:
-        logger.info(f"9999999999999999999999999999   ====={index}")
+    # if len(result) == 0:
+    #     logger.info(f"9999999999999999999999999999   ====={index}")
 
     # 补充一个手动添加啊的区域
     x1, y1, x2, y2 = 19, 606, 105, 700
@@ -228,8 +231,8 @@ def main1():
 
     # useDevice = "cpu"
     local_model_path = "./models/Florence-2-large"
-    florence_model = AutoModelForCausalLM.from_pretrained(local_model_path, trust_remote_code=True, local_files_only=True).to(useDevice).eval()
-    florence_processor = AutoProcessor.from_pretrained(local_model_path, trust_remote_code=True, local_files_only=True)
+    florence_model = None # AutoModelForCausalLM.from_pretrained(local_model_path, trust_remote_code=True, local_files_only=True).to(useDevice).eval()
+    florence_processor = None # AutoProcessor.from_pretrained(local_model_path, trust_remote_code=True, local_files_only=True)
     # florence_model = AutoModelForCausalLM.from_pretrained("microsoft/Florence-2-large", trust_remote_code=True).to(useDevice).eval()
     # florence_processor = AutoProcessor.from_pretrained("microsoft/Florence-2-large", trust_remote_code=True)
     logger.info("Florence-2 Model loaded")
@@ -267,7 +270,7 @@ def main1():
 
     # frame_img_list = list()
 
-    max_workers = 30
+    max_workers = 50
     threadPool = ThreadPoolExecutor(max_workers=max_workers)
     # futures = list()
     # 创建线程安全的队列
@@ -288,13 +291,14 @@ def main1():
 
     # 处理数据结果
     def get_result():
+        time.sleep(3)
         needIndex = 0
         tmpList = list()
-        while needIndex <= total_frames - 1:
+        while needIndex < total_frames - 1:
             if not running:
                 break
             # 2秒扫一轮
-            time.sleep(3)
+            # time.sleep(1)
             while len(tmpList) > 0 and needIndex == tmpList[0]["index"]:
                 print(f"处理结果: {tmpList[0]["index"]}")
                 needIndex += 1
@@ -307,25 +311,24 @@ def main1():
                 # 去掉第一个数据
                 tmpList.pop(0)
 
-            for i in range(max_workers):
-                future = shared_queue.get()
-                if not future.done():
-                    shared_queue.put(future)
+            future = shared_queue.get()
+            if not future.done():
+                shared_queue.put(future)
+            else:
+                result = future.result()
+                if needIndex == result["index"]:
+                    print(f"收到结果: {result["index"]}")
+                    needIndex += 1
+                    # 重新加载为图片
+                    result_image = Image.fromarray(cv2.cvtColor(result["data"], cv2.COLOR_BGR2RGB))
+                    # 转换回 OpenCV 格式并写入输出视频
+                    frame_result = cv2.cvtColor(np.array(result_image), cv2.COLOR_RGB2BGR)
+                    # 写入帧
+                    out.write(frame_result)
                 else:
-                    result = future.result()
-                    if needIndex == result["index"]:
-                        print(f"收到结果: {result["index"]}")
-                        needIndex += 1
-                        # 重新加载为图片
-                        result_image = Image.fromarray(cv2.cvtColor(result["data"], cv2.COLOR_BGR2RGB))
-                        # 转换回 OpenCV 格式并写入输出视频
-                        frame_result = cv2.cvtColor(np.array(result_image), cv2.COLOR_RGB2BGR)
-                        # 写入帧
-                        out.write(frame_result)
-                    else:
-                        tmpList.append(result)
-                        # 按index从小到大排序一次
-                        tmpList.sort(key=lambda x: x["index"])
+                    tmpList.append(result)
+                    # 按index从小到大排序一次
+                    tmpList.sort(key=lambda x: x["index"])
 
     # 启动读取线程
     t = threading.Thread(target=get_result, name='get_result')
@@ -350,9 +353,6 @@ def main1():
             convert_time = time.time()  # 转换完成时间
 
             shared_queue.put(threadPool.submit(process_frame, pil_image, florence_model,florence_processor,useDevice,model_manager,reader,frame_count))
-            # 数量超过等候一下
-            while shared_queue.qsize() > max_workers * 3:
-                time.sleep(0.2)
 
             # 更新进度
             frame_count += 1
